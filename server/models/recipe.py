@@ -1,9 +1,11 @@
 from flask_sqlalchemy import SQLAlchemy
 from . import db
 
-db = SQLAlchemy()
+
 
 class Recipe(db.Model):
+    __tablename__ = 'recipe'
+
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
     ingredients = db.Column(db.Text, nullable=False)

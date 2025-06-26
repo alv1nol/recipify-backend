@@ -1,6 +1,6 @@
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import check_password_hash
-from models import User,db
+from server.models import db, User
 
 def register_user(username, email, password):
     if User.query.filter_by(username=username).first():
