@@ -19,7 +19,7 @@ def login_user(username, password):
     if not user or not user.check_password(password):
         return {"error": "Invalid credentials"}, 401
     
-    access_token = create_access_token(identity=user.id)
+    access_token = create_access_token(identity=str(user.id))  
     return {"access_token": access_token}, 200
 
 @jwt_required()

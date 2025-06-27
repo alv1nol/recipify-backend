@@ -2,7 +2,9 @@ import os
 from flask import request, jsonify, send_from_directory
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
-from server.models import db, User, Recipe, Comment
+from datetime import datetime
+
+from server.models import db, User, Recipe, Comment, Like
 from server.auth import register_user, login_user, get_current_user
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
@@ -11,52 +13,37 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def init_routes(app):
-    # UPLOAD SETUP
+    # Upload Setup
     UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
     app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-    # AUTH 
-    @app.route('/api/register', methods=['POST'])
-    def register():
-        data = request.get_json()
-        return register_user(data['username'], data['email'], data['password'])
 
-    @app.route('/api/login', methods=['POST'])
-    def login():
-        data = request.get_json()
-        return login_user(data['username'], data['password'])
-
-    @app.route('/api/profile', methods=['GET'])
+    # Upload
+    @app.route('/api/upload', methods=['POST'])
     @jwt_required()
-    def profile():
-        return get_current_user()
+    def upload_image():
+        if 'image' not in request.files:
+            print("[UPLOAD] Missing 'image' field")
+            return jsonify({'error': 'No image field in request'}), 400
 
-    # UPLOAD 
-@app.route('/api/upload', methods=['POST'])
-@jwt_required()
-def upload_image():
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image part'}), 400
+        file = request.files['image']
+        print("[UPLOAD] Got file:", file.filename)
 
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
 
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        image_url = f"/uploads/{filename}"
-        return jsonify({'url': image_url}), 200
+        if allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            print("[UPLOAD] File allowed, saving as:", filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+            return jsonify({'url': f'/uploads/{filename}'}), 200
 
-    return jsonify({'error': 'Invalid file type'}), 400
+        print("[UPLOAD] Disallowed file type:", file.filename)
+        return jsonify({'error': 'Invalid file type. Allowed: png, jpg, jpeg, gif'}), 422
 
-    @app.route('/uploads/<filename>')
-    def uploaded_file(filename):
-        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-    # RECIPES
+    # Recipes
     @app.route('/api/recipes', methods=['GET', 'POST'])
     @jwt_required()
     def recipes():
@@ -65,7 +52,8 @@ def upload_image():
             return jsonify([{
                 'id': r.id,
                 'title': r.title,
-                'image_url': r.image_url
+                'image_url': r.image_url,
+                'user_id': r.user_id
             } for r in recipes]), 200
 
         elif request.method == 'POST':
@@ -81,7 +69,6 @@ def upload_image():
             db.session.commit()
             return jsonify({"message": "Recipe created"}), 201
 
-    #  RECIPE DETAIL 
     @app.route('/api/recipes/<int:recipe_id>', methods=['GET', 'PUT', 'DELETE'])
     @jwt_required()
     def recipe_detail(recipe_id):
@@ -120,7 +107,7 @@ def upload_image():
             db.session.commit()
             return jsonify({"message": "Recipe deleted"}), 200
 
-    # COMMENTS 
+    # Comments
     @app.route('/api/comments/<int:recipe_id>', methods=['POST'])
     @jwt_required()
     def add_comment(recipe_id):
@@ -144,7 +131,44 @@ def upload_image():
         db.session.commit()
         return jsonify({"message": "Comment deleted"}), 200
 
-    #  USERS 
+    # Likes
+    @app.route('/api/likes/<int:recipe_id>', methods=['POST'])
+    @jwt_required()
+    def like_recipe(recipe_id):
+        user_id = get_jwt_identity()
+        existing = Like.query.filter_by(user_id=user_id, recipe_id=recipe_id).first()
+        if existing:
+            return jsonify({'message': 'Already liked'}), 400
+
+        new_like = Like(user_id=user_id, recipe_id=recipe_id, created_at=datetime.utcnow())
+        db.session.add(new_like)
+        db.session.commit()
+        return jsonify({'message': 'Recipe liked!'}), 201
+
+    @app.route('/api/likes/<int:recipe_id>', methods=['DELETE'])
+    @jwt_required()
+    def unlike_recipe(recipe_id):
+        user_id = get_jwt_identity()
+        like = Like.query.filter_by(user_id=user_id, recipe_id=recipe_id).first()
+        if not like:
+            return jsonify({'message': 'Like not found'}), 404
+
+        db.session.delete(like)
+        db.session.commit()
+        return jsonify({'message': 'Like removed'}), 200
+
+    @app.route('/api/likes', methods=['GET'])
+    @jwt_required()
+    def get_likes():
+        user_id = get_jwt_identity()
+        likes = Like.query.filter_by(user_id=user_id).all()
+        return jsonify([{
+            'id': like.id,
+            'recipe_id': like.recipe_id,
+            'timestamp': like.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        } for like in likes]), 200
+
+    # Users
     @app.route('/api/users', methods=['GET'])
     @jwt_required()
     def get_users():
@@ -189,3 +213,33 @@ def upload_image():
             db.session.delete(user)
             db.session.commit()
             return jsonify({"message": "User deleted"}), 200
+        
+    # Auth #
+    @app.route('/api/register', methods=['POST'])
+    def register():
+        data = request.get_json() or {}
+
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+
+        if not username or not email or not password:
+            return jsonify({'message': 'Username, email, and password are required'}), 400
+
+        return register_user(username, email, password)
+    
+    # LOGIN #
+    @app.route('/api/login', methods=['POST'])
+    def login():
+        data = request.get_json() or {}
+
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            return jsonify({'message': 'Username and password are required'}), 400
+
+        return login_user(username, password)
+    
+  
+    

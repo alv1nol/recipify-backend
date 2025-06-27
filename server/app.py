@@ -4,23 +4,21 @@ from server.models import db
 from server.config import Config
 from server.controllers.routes import init_routes
 from flask_migrate import Migrate
-from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager
 import os
-from server.controllers.routes import init_routes
 
+jwt = JWTManager()
 
 def create_app():
     app = Flask(__name__)
-    
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///recipes.db'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), '..', 'uploads')
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    app.config.from_object(Config)
 
+    CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": "http://localhost:5173"}})
+    jwt.init_app(app)
     db.init_app(app)
-    migrate = Migrate(app, db)
+    Migrate(app, db)
 
-    init_routes(app) 
+    init_routes(app)
 
     with app.app_context():
         db.create_all()
